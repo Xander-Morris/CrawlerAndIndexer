@@ -6,6 +6,11 @@ import (
 	"time"
 )
 
+type ScrapeConfig struct {
+	MaxLevel int 
+	MaxWorkers int 
+}
+
 func recursiveScrape(botAgent string, guard *RobotsGuard, visited *sync.Map, wordToUrls *sync.Map, seedUrls []string, config *ScrapeConfig, level int) {
 	if level >= config.MaxLevel {
 		fmt.Println("Max level!")
@@ -45,7 +50,7 @@ func recursiveScrape(botAgent string, guard *RobotsGuard, visited *sync.Map, wor
 
 		wg.Wait()
 		fmt.Println("Done with worker batch!")
-		time.Sleep(0.5 * 100000000)
+		time.Sleep(0.25 * 100000000)
 	}
 
 	time.Sleep(1 * 100000000)
