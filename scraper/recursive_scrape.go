@@ -7,16 +7,11 @@ import (
 )
 
 type ScrapeConfig struct {
-	MaxLevel int 
-	MaxWorkers int 
+	MaxLevel   int
+	MaxWorkers int
 }
 
-func recursiveScrape(botAgent string, guard *RobotsGuard, visited *sync.Map, wordToUrls *sync.Map, seedUrls []string, config *ScrapeConfig, level int) {
-	if level >= config.MaxLevel {
-		fmt.Println("Max level!")
-		return
-	}
-
+func recursiveScrape(botAgent string, guard *RobotsGuard, visited *sync.Map, wordsToUrls *WordsToUrls, seedUrls []string, config *ScrapeConfig, level int) {
 	fmt.Println("About to start a recursive scrape with seed urls!")
 	results := make(chan ScrapeResults, len(seedUrls))
 
@@ -45,17 +40,19 @@ func recursiveScrape(botAgent string, guard *RobotsGuard, visited *sync.Map, wor
 
 			j++
 			visited.Store(pageURL, "")
-			wg.Go(func() { extractFromPage(botAgent, pageURL, wordToUrls, results) })
+			wg.Go(func() { extractFromPage(botAgent, pageURL, wordsToUrls, results) })
 		}
 
 		wg.Wait()
 		fmt.Println("Done with worker batch!")
-		time.Sleep(0.25 * 100000000)
+		time.Sleep(time.Second)
 	}
 
-	time.Sleep(1 * 100000000)
+	time.Sleep(time.Second)
 
-	fmt.Println("Starting to get those combined next urls!")
+	if level >= config.MaxLevel {
+		return
+	}
 
 	var combinedNextUrls []string
 
@@ -64,20 +61,15 @@ func recursiveScrape(botAgent string, guard *RobotsGuard, visited *sync.Map, wor
 		combinedNextUrls = append(combinedNextUrls, nextUrls.nextURLs...)
 	}
 
-	fmt.Println(len(combinedNextUrls))
-
-	close(results)
-	recursiveScrape(botAgent, guard, visited, wordToUrls, combinedNextUrls, config, level + 1)
+	recursiveScrape(botAgent, guard, visited, wordsToUrls, combinedNextUrls, config, level+1)
 }
 
-func StartRecursiveScrape(botAgent string, seedUrls []string, config *ScrapeConfig) {
+func ScrapeUrls(botAgent string, seedUrls []string, config *ScrapeConfig) *WordsToUrls {
 	guard := &RobotsGuard{userAgent: botAgent}
 	var visited sync.Map
-	var wordToUrls sync.Map
+	var wordsToUrls = NewWordsToUrls()
 
-	recursiveScrape(botAgent, guard, &visited, &wordToUrls, seedUrls, config, 1)
+	recursiveScrape(botAgent, guard, &visited, wordsToUrls, seedUrls, config, 1)
 
-	for word, sites := range wordToUrls.Range {
-		fmt.Printf("Word %s has sites %s", word, sites)
-	}
+	return wordsToUrls
 }

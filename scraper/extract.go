@@ -5,7 +5,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
+	"time"
+	"unicode"
 
 	"golang.org/x/net/html"
 )
@@ -36,25 +37,45 @@ func extractLinks(n *html.Node, base *url.URL) []string {
 	return links
 }
 
-func extractWords(n *html.Node, pageURL string, words *sync.Map) {
+func normalizeWord(word string) string {
+	chars := make([]rune, 0, len(word))
+
+	for _, r := range word {
+		if !unicode.IsLetter(r) {
+			continue
+		}
+
+		r = unicode.ToLower(r)
+		chars = append(chars, r)
+	}
+
+	return string(chars)
+}
+
+func extractWords(n *html.Node, pageURL string, wordsToUrls *WordsToUrls) {
 	if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style" || n.Data == "noscript") {
 		return
 	}
 
 	if n.Type == html.TextNode {
 		for word := range strings.FieldsSeq(n.Data) {
-			actual, _ := words.LoadOrStore(word, []string{})
-			words.Store(word, append(actual.([]string), pageURL))
+			word := normalizeWord(word)
+
+			if len(word) == 0 {
+				continue
+			}
+
+			wordsToUrls.Add(word, pageURL)
 		}
 	}
 
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		extractWords(c, pageURL, words)
+		extractWords(c, pageURL, wordsToUrls)
 	}
 }
 
-func extractFromPage(botAgent string, pageURL string, wordToUrls *sync.Map, results chan<- ScrapeResults) {
-	client := &http.Client{}
+func extractFromPage(botAgent string, pageURL string, wordsToUrls *WordsToUrls, results chan<- ScrapeResults) {
+	client := &http.Client{Timeout: 2 * time.Second}
 	req, err := http.NewRequest("GET", pageURL, nil)
 
 	if err != nil {
@@ -81,7 +102,7 @@ func extractFromPage(botAgent string, pageURL string, wordToUrls *sync.Map, resu
 
 	base, _ := url.Parse(pageURL)
 	links := extractLinks(doc, base)
-	extractWords(doc, pageURL, wordToUrls)
+	extractWords(doc, pageURL, wordsToUrls)
 
 	results <- ScrapeResults{nextURLs: links}
 }

@@ -15,18 +15,20 @@ type RobotsGuard struct {
 }
 
 func (g *RobotsGuard) IsAllowed(targetURL string) (bool, error) {
-	value, exists := g.robotsAllowed.Load(targetURL)
+	parsedURL, err := url.Parse(targetURL)
+
+	if err != nil {
+		return false, err
+	}
+
+	host := parsedURL.Host
+	value, exists := g.robotsAllowed.Load(host)
 
 	if exists {
 		return value.(bool), nil
 	}
 
-	parsedURL, err := url.Parse(targetURL)
-	if err != nil {
-		return false, err
-	}
-
-	robotsURL := fmt.Sprintf("%s://%s/robots.txt", parsedURL.Scheme, parsedURL.Host)
+	robotsURL := fmt.Sprintf("%s://%s/robots.txt", parsedURL.Scheme, host)
 	resp, err := http.Get(robotsURL)
 
 	if err != nil {
@@ -38,13 +40,13 @@ func (g *RobotsGuard) IsAllowed(targetURL string) (bool, error) {
 	robotsData, err := robotstxt.FromResponse(resp)
 
 	if err != nil {
-		return false, nil 
+		return false, nil
 	}
 
 	group := robotsData.FindGroup(g.userAgent)
 
 	allowed := group.Test(parsedURL.Path)
-	g.robotsAllowed.Store(targetURL, allowed)
+	g.robotsAllowed.Store(host, allowed)
 
 	return allowed, nil
 }
