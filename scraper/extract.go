@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"fmt"
+	"main/data_structures"
 	"net/http"
 	"net/url"
 	"strings"
@@ -52,7 +53,7 @@ func normalizeWord(word string) string {
 	return string(chars)
 }
 
-func extractWords(n *html.Node, pageURL string, wordsToUrls *WordsToUrls) {
+func extractWords(n *html.Node, pageURL string, wordsToUrls *data_structures.WordsToUrls) {
 	if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style" || n.Data == "noscript") {
 		return
 	}
@@ -74,7 +75,7 @@ func extractWords(n *html.Node, pageURL string, wordsToUrls *WordsToUrls) {
 	}
 }
 
-func extractFromPage(botAgent string, pageURL string, wordsToUrls *WordsToUrls, results chan<- ScrapeResults) {
+func extractFromPage(scrapeInstances *ScrapeInstances, pageURL string) {
 	client := &http.Client{Timeout: 2 * time.Second}
 	req, err := http.NewRequest("GET", pageURL, nil)
 
@@ -83,7 +84,7 @@ func extractFromPage(botAgent string, pageURL string, wordsToUrls *WordsToUrls, 
 		return
 	}
 
-	req.Header.Set("User-Agent", botAgent)
+	req.Header.Set("User-Agent", scrapeInstances.BotAgent)
 	response, err := client.Do(req)
 
 	if err != nil {
@@ -102,7 +103,7 @@ func extractFromPage(botAgent string, pageURL string, wordsToUrls *WordsToUrls, 
 
 	base, _ := url.Parse(pageURL)
 	links := extractLinks(doc, base)
-	extractWords(doc, pageURL, wordsToUrls)
+	extractWords(doc, pageURL, scrapeInstances.WordsToUrls)
 
-	results <- ScrapeResults{nextURLs: links}
+	scrapeInstances.Results <- ScrapeResults{nextURLs: links}
 }
