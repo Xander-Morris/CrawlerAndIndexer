@@ -61,6 +61,7 @@ func WriteToDatabase(wordsToUrls *scraper.WordsToUrls) {
 	wordStmt, _ := tx.Prepare(insertWordSQL)
 	urlStmt, _ := tx.Prepare(insertUrlSQL)
 	wordToUrlStmt, _ := tx.Prepare(insertWordToUrlSQL)
+	urlToId := make(map[string]int64)
 	defer wordStmt.Close()
 	defer urlStmt.Close()
 	defer wordToUrlStmt.Close()
@@ -70,9 +71,14 @@ func WriteToDatabase(wordsToUrls *scraper.WordsToUrls) {
 		word_id, _ := result.LastInsertId()
 
 		for url := range urls {
-			result, _ = urlStmt.Exec(url, word_id)
-			url_id, _ := result.LastInsertId()
-			wordToUrlStmt.Exec(word_id, url_id)
+			id, exists := urlToId[url]
+
+			if !exists {
+				result, _ = urlStmt.Exec(url, word_id)
+				id, _ = result.LastInsertId()
+			}
+
+			wordToUrlStmt.Exec(word_id, id)
 		}
 	}
 
