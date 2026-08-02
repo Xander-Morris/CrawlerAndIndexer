@@ -76,6 +76,7 @@ func WriteToDatabase(wordsToUrls *scraper.WordsToUrls) {
 			if !exists {
 				result, _ = urlStmt.Exec(url, word_id)
 				id, _ = result.LastInsertId()
+				urlToId[url] = id 
 			}
 
 			wordToUrlStmt.Exec(word_id, id)
