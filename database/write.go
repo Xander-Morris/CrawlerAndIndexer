@@ -5,43 +5,60 @@ import (
 	"fmt"
 	"log"
 	"main/scraper"
+	"os"
 	"strings"
 
 	_ "github.com/glebarez/go-sqlite"
 )
 
-var tables = map[string][]map[string]string{
-	"words": {
-		{"id": "INTEGER PRIMARY KEY AUTOINCREMENT"},
-		{"word": "TEXT NOT NULL"},
+type Schema map[string]TableDefinition
+
+type TableDefinition struct {
+	Columns         []map[string]string
+	Indexes         map[string]string
+	InsertStatement string
+}
+
+var tables = Schema{
+	"words": TableDefinition{
+		Columns: []map[string]string{
+			{"id": "INTEGER PRIMARY KEY AUTOINCREMENT"},
+			{"word": "TEXT NOT NULL"},
+		},
+		Indexes: map[string]string{
+			"idx_word": "CREATE UNIQUE INDEX idx_word ON words(word);",
+		},
+		InsertStatement: `INSERT INTO words (word) VALUES (?) ON CONFLICT(word) DO UPDATE SET word=excluded.word RETURNING id;`,
 	},
-	"urls": {
-		{"id": "INTEGER PRIMARY KEY AUTOINCREMENT"},
-		{"url": "TEXT NOT NULL"},
+	"urls": TableDefinition{
+		Columns: []map[string]string{
+			{"id": "INTEGER PRIMARY KEY AUTOINCREMENT"},
+			{"url": "TEXT NOT NULL"},
+		},
+		Indexes: map[string]string{
+			"idx_url": "CREATE UNIQUE INDEX idx_url ON urls(url);",
+		},
+		InsertStatement: `INSERT INTO urls (url) VALUES (?) ON CONFLICT(url) DO UPDATE SET url=excluded.url RETURNING id;`,
 	},
-	"words_to_urls": {
-		{"word_id": "INTEGER REFERENCES words(id)"},
-		{"url_id": "INTEGER REFERENCES urls(id)"},
+	"words_to_urls": TableDefinition{
+		Columns: []map[string]string{
+			{"word_id": "INTEGER REFERENCES words(id)"},
+			{"url_id": "INTEGER REFERENCES urls(id)"},
+		},
+		Indexes: map[string]string{
+			"word_url_pair": "CREATE UNIQUE INDEX word_url_pair ON words_to_urls(word_id, url_id);",
+		},
+		InsertStatement: `INSERT INTO words_to_urls (word_id, url_id) VALUES (?, ?);`,
 	},
 }
 
-func WriteToDatabase(wordsToUrls *scraper.WordsToUrls) {
-	db, err := sql.Open("sqlite", "words_to_urls.db")
+const databaseFileName = "words_to_urls.db"
 
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	defer db.Close()
-
-	db.Exec("PRAGMA journal_mode=WAL;")
-	db.Exec("PRAGMA synchronous=NORMAL;")
-	tx, err := db.Begin()
-
-	for tableName, columns := range tables {
+func createTables(db *sql.DB) {
+	for tableName, tableInfo := range tables {
 		var colDefs []string
 
-		for _, colMap := range columns {
+		for _, colMap := range tableInfo.Columns {
 			for colName, colType := range colMap {
 				colDefs = append(colDefs, fmt.Sprintf("%s %s", colName, colType))
 			}
@@ -53,35 +70,85 @@ func WriteToDatabase(wordsToUrls *scraper.WordsToUrls) {
 		if err != nil {
 			log.Fatal(err)
 		}
+
+		for _, indexCmd := range tableInfo.Indexes {
+			db.Exec(indexCmd)
+		}
+	}
+}
+
+func prepareInsertStatements(tx *sql.Tx) map[string]*sql.Stmt {
+	tableNameToInsertStmt := make(map[string]*sql.Stmt)
+
+	for tableName, tableInfo := range tables {
+		stmt, err := tx.Prepare(tableInfo.InsertStatement)
+
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		tableNameToInsertStmt[tableName] = stmt
 	}
 
-	insertWordSQL := `INSERT INTO words (word) VALUES (?);`
-	insertUrlSQL := `INSERT INTO urls (url) VALUES (?);`
-	insertWordToUrlSQL := `INSERT INTO words_to_urls (word_id, url_id) VALUES (?, ?);`
-	wordStmt, _ := tx.Prepare(insertWordSQL)
-	urlStmt, _ := tx.Prepare(insertUrlSQL)
-	wordToUrlStmt, _ := tx.Prepare(insertWordToUrlSQL)
-	urlToId := make(map[string]int64)
-	defer wordStmt.Close()
-	defer urlStmt.Close()
-	defer wordToUrlStmt.Close()
+	return tableNameToInsertStmt
+}
 
+func writeWordsToUrls(wordsToUrls *scraper.WordsToUrls, tableNameToInsertStmt map[string]*sql.Stmt) error {
 	for word, urls := range wordsToUrls.GetItems() {
-		result, _ := wordStmt.Exec(word)
-		word_id, _ := result.LastInsertId()
+		var wordID int64
+
+		if err := tableNameToInsertStmt["words"].QueryRow(word).Scan(&wordID); err != nil {
+			return err
+		}
 
 		for url := range urls {
-			id, exists := urlToId[url]
+			var urlID int64
 
-			if !exists {
-				result, _ = urlStmt.Exec(url, word_id)
-				id, _ = result.LastInsertId()
-				urlToId[url] = id 
+			if err := tableNameToInsertStmt["urls"].QueryRow(url).Scan(&urlID); err != nil {
+				return err
 			}
 
-			wordToUrlStmt.Exec(word_id, id)
+			if _, err := tableNameToInsertStmt["words_to_urls"].Exec(wordID, urlID); err != nil {
+				return err
+			}
 		}
 	}
 
-	tx.Commit()
+	return nil
+}
+
+func WriteToDatabase(wordsToUrls *scraper.WordsToUrls) {
+	_ = os.Remove(databaseFileName)
+	db, err := sql.Open("sqlite", databaseFileName)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer db.Close()
+
+	db.Exec("PRAGMA journal_mode=WAL;")
+	db.Exec("PRAGMA synchronous=NORMAL;")
+	createTables(db)
+	tx, err := db.Begin()
+
+	if err != nil {
+		log.Fatal(err)
+		tx.Rollback()
+	}
+
+	tableNameToInsertStmt := prepareInsertStatements(tx)
+
+	for _, stmt := range tableNameToInsertStmt {
+		defer stmt.Close()
+	}
+
+	if err := writeWordsToUrls(wordsToUrls, tableNameToInsertStmt); err != nil {
+		tx.Rollback()
+		log.Fatal(err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Fatal(err)
+	}
 }
