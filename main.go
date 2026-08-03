@@ -22,6 +22,7 @@ func main() {
 	}
 
 	results, err := database.SearchForJobs(&database.JobSearchParams{
+		SearchQuery:   "engineer",
 		WorkplaceType: jobs.Remote,
 	})
 

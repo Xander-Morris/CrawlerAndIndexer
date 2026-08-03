@@ -99,6 +99,10 @@ func WriteToDatabase(jobs []jobs.Job) error {
 		return err
 	}
 
+	if err := createFullTextSearch(db); err != nil {
+		return err
+	}
+
 	tx, err := db.Begin()
 
 	if err != nil {

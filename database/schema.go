@@ -1,5 +1,10 @@
 package database
 
+import (
+	"database/sql"
+	"fmt"
+)
+
 type Schema map[string]TableDefinition
 
 type TableDefinition struct {
@@ -58,4 +63,43 @@ var tables = Schema{
 		},
 		InsertStatement: `INSERT OR IGNORE INTO job_tags (job_id, tag_id) VALUES (?, ?);`,
 	},
+}
+
+const jobsFTSTable = `CREATE VIRTUAL TABLE IF NOT EXISTS jobs_fts USING fts5(
+	title, description, content='jobs', content_rowid='id'
+);`
+
+var jobsFTSTriggers = []string{
+	`CREATE TRIGGER IF NOT EXISTS jobs_fts_ai AFTER INSERT ON jobs BEGIN
+		INSERT INTO jobs_fts(rowid, title, description) VALUES (new.id, new.title, new.description);
+	END;`,
+	`CREATE TRIGGER IF NOT EXISTS jobs_fts_ad AFTER DELETE ON jobs BEGIN
+		INSERT INTO jobs_fts(jobs_fts, rowid, title, description) VALUES ('delete', old.id, old.title, old.description);
+	END;`,
+	`CREATE TRIGGER IF NOT EXISTS jobs_fts_au AFTER UPDATE ON jobs BEGIN
+		INSERT INTO jobs_fts(jobs_fts, rowid, title, description) VALUES ('delete', old.id, old.title, old.description);
+		INSERT INTO jobs_fts(rowid, title, description) VALUES (new.id, new.title, new.description);
+	END;`,
+}
+
+const backfillJobsFTS = `INSERT INTO jobs_fts(rowid, title, description)
+	SELECT id, title, description FROM jobs
+	WHERE id NOT IN (SELECT rowid FROM jobs_fts);`
+
+func createFullTextSearch(db *sql.DB) error {
+	if _, err := db.Exec(jobsFTSTable); err != nil {
+		return fmt.Errorf("create jobs_fts table: %w", err)
+	}
+
+	for _, trigger := range jobsFTSTriggers {
+		if _, err := db.Exec(trigger); err != nil {
+			return fmt.Errorf("create fts sync trigger: %w", err)
+		}
+	}
+
+	if _, err := db.Exec(backfillJobsFTS); err != nil {
+		return fmt.Errorf("backfill jobs_fts: %w", err)
+	}
+
+	return nil
 }

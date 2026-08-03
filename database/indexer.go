@@ -63,16 +63,19 @@ func SearchForJobs(params *JobSearchParams) ([]jobs.Job, error) {
 }
 
 func buildJobSearchQuery(params *JobSearchParams) (string, []any) {
-	query := `SELECT j.id, j.title, j.company, COALESCE(j.location, ''), j.workplace_type,
-		j.salary_min, j.salary_max, j.posted_at, j.url, COALESCE(j.description, '') FROM jobs j`
+	const jobColumns = `j.id, j.title, j.company, COALESCE(j.location, ''), j.workplace_type,
+		j.salary_min, j.salary_max, j.posted_at, j.url, COALESCE(j.description, '')`
 
+	var query string
 	var conditions []string
 	var args []any
 
 	if params.SearchQuery != "" {
-		likeArg := "%" + strings.ToLower(params.SearchQuery) + "%"
-		conditions = append(conditions, "(LOWER(j.title) LIKE ? OR LOWER(j.description) LIKE ?)")
-		args = append(args, likeArg, likeArg)
+		query = fmt.Sprintf("SELECT %s FROM jobs_fts JOIN jobs j ON j.id = jobs_fts.rowid", jobColumns)
+		conditions = append(conditions, "jobs_fts MATCH ?")
+		args = append(args, sanitizeFTSQuery(params.SearchQuery))
+	} else {
+		query = fmt.Sprintf("SELECT %s FROM jobs j", jobColumns)
 	}
 
 	if params.WorkplaceType != jobs.Unknown {
@@ -110,10 +113,27 @@ func buildJobSearchQuery(params *JobSearchParams) (string, []any) {
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	query += " ORDER BY j.posted_at DESC LIMIT ?"
+	if params.SearchQuery != "" {
+		query += " ORDER BY rank"
+	} else {
+		query += " ORDER BY j.posted_at DESC"
+	}
+
+	query += " LIMIT ?"
 	args = append(args, maxSearchResults)
 
 	return query, args
+}
+
+func sanitizeFTSQuery(query string) string {
+	fields := strings.Fields(query)
+	quoted := make([]string, len(fields))
+
+	for i, field := range fields {
+		quoted[i] = `"` + strings.ReplaceAll(field, `"`, `""`) + `"`
+	}
+
+	return strings.Join(quoted, " ")
 }
 
 func scanJobRow(rows *sql.Rows) (jobs.Job, int64, error) {
@@ -139,8 +159,6 @@ func scanJobRow(rows *sql.Rows) (jobs.Job, int64, error) {
 		job.SalaryMax = &max
 	}
 
-	// Defensive: unsure whether the driver round-trips posted_at as a
-	// string or as time.Time, so handle whichever comes back.
 	switch v := postedAtRaw.(type) {
 	case time.Time:
 		job.PostedAt = v
