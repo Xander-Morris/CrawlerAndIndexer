@@ -1,12 +1,37 @@
 package main
 
 import (
-	"main/scraper"
+	"fmt"
+	"main/database"
+	"main/jobs"
 )
 
 func main() {
 	botAgent := "MyCustomScraperBot/1.0"
-	seedUrls := []string{"https://www.gutenberg.org/", "https://www.wikipedia.org/"}
-	config := &scraper.ScrapeConfig{MaxLevel: 2, MaxWorkers: 100, MaxInMemoryEntries: 1000}
-	scraper.ScrapeUrls(botAgent, seedUrls, config)
+	remoteOk := jobs.NewRemoteOK(botAgent)
+	fetchedJobs, err := remoteOk.FetchJobs()
+
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("Fetched %d jobs from RemoteOK\n", len(fetchedJobs))
+
+	if err := database.WriteToDatabase(fetchedJobs); err != nil {
+		panic(err)
+	}
+
+	results, err := database.SearchForJobs(&database.JobSearchParams{
+		WorkplaceType: jobs.Remote,
+	})
+
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("Found %d matching jobs:\n", len(results))
+
+	for _, job := range results {
+		fmt.Printf("- %s at %s (%s)\n", job.Title, job.Company, job.URL)
+	}
 }

@@ -4,54 +4,13 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"main/data_structures"
+	"main/jobs"
 	"strings"
 
 	_ "github.com/glebarez/go-sqlite"
 )
 
-type Schema map[string]TableDefinition
-
-type TableDefinition struct {
-	Columns         []map[string]string
-	Indexes         map[string]string
-	InsertStatement string
-}
-
-var tables = Schema{
-	"words": TableDefinition{
-		Columns: []map[string]string{
-			{"id": "INTEGER PRIMARY KEY AUTOINCREMENT"},
-			{"word": "TEXT NOT NULL"},
-		},
-		Indexes: map[string]string{
-			"idx_word": "CREATE UNIQUE INDEX IF NOT EXISTS idx_word ON words(word);",
-		},
-		InsertStatement: `INSERT INTO words (word) VALUES (?) ON CONFLICT(word) DO UPDATE SET word=excluded.word RETURNING id;`,
-	},
-	"urls": TableDefinition{
-		Columns: []map[string]string{
-			{"id": "INTEGER PRIMARY KEY AUTOINCREMENT"},
-			{"url": "TEXT NOT NULL"},
-		},
-		Indexes: map[string]string{
-			"idx_url": "CREATE UNIQUE INDEX IF NOT EXISTS idx_url ON urls(url);",
-		},
-		InsertStatement: `INSERT INTO urls (url) VALUES (?) ON CONFLICT(url) DO UPDATE SET url=excluded.url RETURNING id;`,
-	},
-	"words_to_urls": TableDefinition{
-		Columns: []map[string]string{
-			{"word_id": "INTEGER REFERENCES words(id)"},
-			{"url_id": "INTEGER REFERENCES urls(id)"},
-		},
-		Indexes: map[string]string{
-			"word_url_pair": "CREATE UNIQUE INDEX IF NOT EXISTS word_url_pair ON words_to_urls(word_id, url_id);",
-		},
-		InsertStatement: `INSERT OR IGNORE INTO words_to_urls (word_id, url_id) VALUES (?, ?);`,
-	},
-}
-
-const databaseFileName = "words_to_urls.db"
+const databaseFileName = "jobs.db"
 
 func createTables(db *sql.DB) error {
 	for tableName, tableInfo := range tables {
@@ -95,23 +54,23 @@ func prepareInsertStatements(tx *sql.Tx) (map[string]*sql.Stmt, error) {
 	return tableNameToInsertStmt, nil
 }
 
-func writeWordsToUrls(wordsToUrls *data_structures.WordsToUrls, tableNameToInsertStmt map[string]*sql.Stmt) error {
-	for word, urls := range wordsToUrls.GetItems() {
-		var wordID int64
+func writeJobs(jobs []jobs.Job, tableNameToInsertStmt map[string]*sql.Stmt) error {
+	for _, job := range jobs {
+		var jobID int64
 
-		if err := tableNameToInsertStmt["words"].QueryRow(word).Scan(&wordID); err != nil {
+		if err := tableNameToInsertStmt["jobs"].QueryRow(job.Title, job.Company, job.Location, job.WorkplaceType, job.SalaryMin, job.SalaryMax, job.PostedAt, job.URL, job.Description).Scan(&jobID); err != nil {
 			return err
 		}
 
-		for url := range urls {
-			var urlID int64
+		for _, tag := range job.Tags {
+			var tagID int64
 
-			if err := tableNameToInsertStmt["urls"].QueryRow(url).Scan(&urlID); err != nil {
+			if err := tableNameToInsertStmt["tags"].QueryRow(tag).Scan(&tagID); err != nil {
 				return err
 			}
 
-			if _, err := tableNameToInsertStmt["words_to_urls"].Exec(wordID, urlID); err != nil {
-				return err
+			if _, err := tableNameToInsertStmt["job_tags"].Exec(jobID, tagID); err != nil {
+				return err 
 			}
 		}
 	}
@@ -119,7 +78,7 @@ func writeWordsToUrls(wordsToUrls *data_structures.WordsToUrls, tableNameToInser
 	return nil
 }
 
-func WriteToDatabase(wordsToUrls *data_structures.WordsToUrls) error {
+func WriteToDatabase(jobs []jobs.Job) error {
 	db, err := sql.Open("sqlite", databaseFileName)
 
 	if err != nil {
@@ -158,8 +117,8 @@ func WriteToDatabase(wordsToUrls *data_structures.WordsToUrls) error {
 		defer stmt.Close()
 	}
 
-	if err := writeWordsToUrls(wordsToUrls, tableNameToInsertStmt); err != nil {
-		return fmt.Errorf("failed to write words to urls: %w", err)
+	if err := writeJobs(jobs, tableNameToInsertStmt); err != nil {
+		return fmt.Errorf("failed to write jobs: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
