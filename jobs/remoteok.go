@@ -26,7 +26,6 @@ func NewRemoteOK(userAgent string) *RemoteOK {
 	}
 }
 
-// I mirror the raw API response exactly in this struct.
 type remoteOKJob struct {
 	ID          string   `json:"id"`
 	Position    string   `json:"position"`
