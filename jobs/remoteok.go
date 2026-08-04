@@ -3,6 +3,7 @@ package jobs
 import (
 	"encoding/json"
 	"fmt"
+	"main/utils"
 	"net/http"
 	"time"
 )
@@ -86,7 +87,7 @@ func (raw remoteOKJob) toJob() Job {
 		WorkplaceType: Remote,
 		Tags:          raw.Tags,
 		URL:           raw.URL,
-		Description:   raw.Description,
+		Description:   utils.StripHTML(raw.Description),
 	}
 
 	if raw.SalaryMin > 0 {
