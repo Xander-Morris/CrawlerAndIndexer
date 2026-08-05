@@ -8,14 +8,29 @@ import (
 
 func main() {
 	botAgent := "MyCustomScraperBot/1.0"
-	remoteOk := jobs.NewRemoteOK(botAgent)
-	fetchedJobs, err := remoteOk.FetchJobs()
 
-	if err != nil {
-		panic(err)
+	sources := []jobs.JobSource{
+		jobs.NewRemoteOK(botAgent),
+		jobs.NewRemotive(botAgent),
+		jobs.NewArbeitnow(botAgent),
+		jobs.NewJobicy(botAgent),
+		jobs.NewHimalayas(botAgent),
+		jobs.NewWeWorkRemotely(botAgent),
 	}
 
-	fmt.Printf("Fetched %d jobs from RemoteOK\n", len(fetchedJobs))
+	var fetchedJobs []jobs.Job
+
+	for _, source := range sources {
+		sourceJobs, err := source.FetchJobs()
+
+		if err != nil {
+			fmt.Printf("Failed to fetch jobs from %T: %v\n", source, err)
+			continue
+		}
+
+		fmt.Printf("Fetched %d jobs from %T\n", len(sourceJobs), source)
+		fetchedJobs = append(fetchedJobs, sourceJobs...)
+	}
 
 	if err := database.WriteToDatabase(fetchedJobs); err != nil {
 		panic(err)
