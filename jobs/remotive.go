@@ -107,7 +107,7 @@ func (raw RemotiveJob) toJob() Job {
 			chars = append(chars, char)
 		} else {
 			s := string(chars)
-
+			clear(chars)
 			num, err := strconv.Atoi(s)
 
 			if err != nil {
