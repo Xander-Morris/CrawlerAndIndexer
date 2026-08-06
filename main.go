@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"main/database"
 	"main/jobs"
+	"sync"
 )
 
 func main() {
@@ -18,17 +19,28 @@ func main() {
 		jobs.NewWeWorkRemotely(botAgent),
 	}
 
-	var fetchedJobs []jobs.Job
+	var wg sync.WaitGroup	
+	ch := make(chan []jobs.Job, len(sources))
 
 	for _, source := range sources {
-		sourceJobs, err := source.FetchJobs()
+		wg.Go(func() {
+			sourceJobs, err := source.FetchJobs()
 
-		if err != nil {
-			fmt.Printf("Failed to fetch jobs from %T: %v\n", source, err)
-			continue
-		}
+			if err != nil {
+				fmt.Printf("Failed to fetch jobs from %T: %v\n", source, err)
+				return
+			}
 
-		fmt.Printf("Fetched %d jobs from %T\n", len(sourceJobs), source)
+			fmt.Printf("Fetched %d jobs from %T\n", len(sourceJobs), source)
+			ch <- sourceJobs
+		})
+	}
+
+	wg.Wait()
+	close(ch)
+
+	var fetchedJobs []jobs.Job
+	for sourceJobs := range ch {
 		fetchedJobs = append(fetchedJobs, sourceJobs...)
 	}
 
