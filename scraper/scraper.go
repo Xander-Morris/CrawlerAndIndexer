@@ -53,7 +53,7 @@ func runScraper(sources []jobs.JobSource) {
 	}
 
 	if err := database.WriteToDatabase(fetchedJobs); err != nil {
-		panic(err)
+		fmt.Println(err)
 	}
 
 	results, err := database.SearchForJobs(&database.JobSearchParams{
@@ -62,7 +62,7 @@ func runScraper(sources []jobs.JobSource) {
 	})
 
 	if err != nil {
-		panic(err)
+		fmt.Println(err)
 	}
 
 	fmt.Printf("Found %d matching jobs:\n", len(results))
