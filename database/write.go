@@ -79,13 +79,11 @@ func writeJobs(jobs []jobs.Job, tableNameToInsertStmt map[string]*sql.Stmt) erro
 }
 
 func WriteToDatabase(jobs []jobs.Job) error {
-	db, err := sql.Open("sqlite", databaseFileName)
+	db, err := getDb()
 
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return err
 	}
-
-	defer db.Close()
 
 	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
 		log.Printf("Failed to set journal_mode: %v", err)

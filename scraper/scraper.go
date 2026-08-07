@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"context"
 	"fmt"
 	"main/database"
 	"main/jobs"
@@ -56,7 +57,7 @@ func runScraper(sources []jobs.JobSource) {
 		fmt.Println(err)
 	}
 
-	results, err := database.SearchForJobs(&database.JobSearchParams{
+	results, err := database.SearchForJobs(context.Background(), &database.JobSearchParams{
 		SearchQuery:   "engineer",
 		WorkplaceType: jobs.Remote,
 	})
@@ -65,9 +66,9 @@ func runScraper(sources []jobs.JobSource) {
 		fmt.Println(err)
 	}
 
-	fmt.Printf("Found %d matching jobs:\n", len(results))
+	fmt.Printf("Found %d matching jobs:\n", results.Total)
 
-	for _, job := range results {
+	for _, job := range results.Jobs {
 		fmt.Printf("- %s at %s (%s)\n", job.Title, job.Company, job.URL)
 	}
 }

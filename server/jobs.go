@@ -19,7 +19,7 @@ func handleSearchJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results, err := database.SearchForJobs(params)
+	result, err := database.SearchForJobs(r.Context(), params)
 
 	if err != nil {
 		log.Printf("search jobs: %v", err)
@@ -27,11 +27,23 @@ func handleSearchJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if results == nil {
-		results = []jobs.Job{}
+	if result.Jobs == nil {
+		result.Jobs = []jobs.Job{}
 	}
 
-	writeJSON(w, http.StatusOK, results)
+	writeJSON(w, http.StatusOK, jobSearchResponse{
+		Jobs:   result.Jobs,
+		Total:  result.Total,
+		Limit:  params.Limit,
+		Offset: params.Offset,
+	})
+}
+
+type jobSearchResponse struct {
+	Jobs   []jobs.Job `json:"jobs"`
+	Total  int        `json:"total"`
+	Limit  int        `json:"limit"`
+	Offset int        `json:"offset"`
 }
 
 func parseJobSearchParams(r *http.Request) (*database.JobSearchParams, error) {
@@ -39,6 +51,7 @@ func parseJobSearchParams(r *http.Request) (*database.JobSearchParams, error) {
 
 	params := &database.JobSearchParams{
 		SearchQuery: strings.TrimSpace(query.Get("q")),
+		Limit:       database.DefaultSearchLimit,
 	}
 
 	if raw := query.Get("workplace_type"); raw != "" {
@@ -77,6 +90,37 @@ func parseJobSearchParams(r *http.Request) (*database.JobSearchParams, error) {
 				params.Tags = append(params.Tags, trimmed)
 			}
 		}
+	}
+
+	if raw := query.Get("sort"); raw != "" {
+		switch database.SortOrder(raw) {
+		case database.SortDate:
+			params.Sort = database.SortDate
+		case database.SortRelevance:
+			params.Sort = database.SortRelevance
+		default:
+			return nil, fmt.Errorf("invalid sort %q", raw)
+		}
+	}
+
+	if raw := query.Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+
+		if err != nil || limit <= 0 {
+			return nil, fmt.Errorf("invalid limit %q", raw)
+		}
+
+		params.Limit = min(limit, database.MaxSearchLimit)
+	}
+
+	if raw := query.Get("offset"); raw != "" {
+		offset, err := strconv.Atoi(raw)
+
+		if err != nil || offset < 0 {
+			return nil, fmt.Errorf("invalid offset %q", raw)
+		}
+
+		params.Offset = offset
 	}
 
 	return params, nil

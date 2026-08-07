@@ -1,11 +1,19 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"main/jobs"
 	"strings"
 	"time"
+)
+
+type SortOrder string
+
+const (
+	SortRelevance SortOrder = "relevance"
+	SortDate      SortOrder = "date"
 )
 
 type JobSearchParams struct {
@@ -14,21 +22,38 @@ type JobSearchParams struct {
 	WorkplaceType jobs.WorkplaceType
 	MinSalary     int
 	MaxSalary     int
+	Sort          SortOrder
+	Limit         int
+	Offset        int
 }
 
-const maxSearchResults = 50
+const (
+	DefaultSearchLimit = 20
+	MaxSearchLimit     = 50
+)
 
-func SearchForJobs(params *JobSearchParams) ([]jobs.Job, error) {
-	db, err := sql.Open("sqlite", databaseFileName)
+type SearchResult struct {
+	Jobs  []jobs.Job
+	Total int
+}
+
+func SearchForJobs(ctx context.Context, params *JobSearchParams) (*SearchResult, error) {
+	db, err := getDb()
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	defer db.Close()
+	from, whereArgs := buildJobSearchFromWhere(params)
 
-	query, args := buildJobSearchQuery(params)
-	rows, err := db.Query(query, args...)
+	total, err := countJobSearchResults(ctx, db, from, whereArgs)
+
+	if err != nil {
+		return nil, fmt.Errorf("count jobs: %w", err)
+	}
+
+	query, args := buildJobSearchSelect(params, from, whereArgs)
+	rows, err := db.QueryContext(ctx, query, args...)
 
 	if err != nil {
 		return nil, fmt.Errorf("search jobs: %w", err)
@@ -37,6 +62,8 @@ func SearchForJobs(params *JobSearchParams) ([]jobs.Job, error) {
 	defer rows.Close()
 
 	var results []jobs.Job
+	scannedRows := make(map[int64]jobs.Job)
+	var jobOrder []int64
 
 	for rows.Next() {
 		job, jobID, err := scanJobRow(rows)
@@ -45,37 +72,59 @@ func SearchForJobs(params *JobSearchParams) ([]jobs.Job, error) {
 			return nil, fmt.Errorf("scan job row: %w", err)
 		}
 
-		tags, err := fetchJobTags(db, jobID)
-
-		if err != nil {
-			return nil, fmt.Errorf("fetch tags for job %d: %w", jobID, err)
-		}
-
-		job.Tags = tags
-		results = append(results, job)
+		scannedRows[jobID] = job
+		jobOrder = append(jobOrder, jobID)
 	}
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate job rows: %w", err)
 	}
 
-	return results, nil
+	jobIDs := make([]int64, 0, len(scannedRows))
+	for jobID := range scannedRows {
+		jobIDs = append(jobIDs, jobID)
+	}
+
+	tagMap, err := fetchTagsForJobs(ctx, db, jobIDs)
+	if err != nil {
+		return nil, fmt.Errorf("fetch tags for jobs: %w", err)
+	}
+
+	for _, jobID := range jobOrder {
+		job := scannedRows[jobID]
+
+		if tags, ok := tagMap[jobID]; ok {
+			job.Tags = tags
+		}
+
+		results = append(results, job)
+	}
+
+	return &SearchResult{Jobs: results, Total: total}, nil
 }
 
-func buildJobSearchQuery(params *JobSearchParams) (string, []any) {
-	const jobColumns = `j.id, j.title, j.company, COALESCE(j.location, ''), j.workplace_type,
-		j.salary_min, j.salary_max, j.posted_at, j.url, COALESCE(j.description, '')`
+func countJobSearchResults(ctx context.Context, db *sql.DB, from string, args []any) (int, error) {
+	var total int
 
-	var query string
+	query := "SELECT COUNT(*) " + from
+	err := db.QueryRowContext(ctx, query, args...).Scan(&total)
+
+	return total, err
+}
+
+// buildJobSearchFromWhere builds the shared FROM/WHERE clause (and its args) used by
+// both the paginated select and the count query.
+func buildJobSearchFromWhere(params *JobSearchParams) (string, []any) {
+	var from string
 	var conditions []string
 	var args []any
 
 	if params.SearchQuery != "" {
-		query = fmt.Sprintf("SELECT %s FROM jobs_fts JOIN jobs j ON j.id = jobs_fts.rowid", jobColumns)
+		from = "FROM jobs_fts JOIN jobs j ON j.id = jobs_fts.rowid"
 		conditions = append(conditions, "jobs_fts MATCH ?")
 		args = append(args, sanitizeFTSQuery(params.SearchQuery))
 	} else {
-		query = fmt.Sprintf("SELECT %s FROM jobs j", jobColumns)
+		from = "FROM jobs j"
 	}
 
 	if params.WorkplaceType != jobs.Unknown {
@@ -110,17 +159,34 @@ func buildJobSearchQuery(params *JobSearchParams) (string, []any) {
 	}
 
 	if len(conditions) > 0 {
-		query += " WHERE " + strings.Join(conditions, " AND ")
+		from += " WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	if params.SearchQuery != "" {
+	return from, args
+}
+
+func buildJobSearchSelect(params *JobSearchParams, from string, whereArgs []any) (string, []any) {
+	const jobColumns = `j.id, j.title, j.company, COALESCE(j.location, ''), j.workplace_type,
+		j.salary_min, j.salary_max, j.posted_at, j.url, COALESCE(j.description, '')`
+
+	query := fmt.Sprintf("SELECT %s %s", jobColumns, from)
+
+	if params.SearchQuery != "" && params.Sort != SortDate {
 		query += " ORDER BY rank"
 	} else {
 		query += " ORDER BY j.posted_at DESC"
 	}
 
-	query += " LIMIT ?"
-	args = append(args, maxSearchResults)
+	limit := params.Limit
+	if limit <= 0 || limit > MaxSearchLimit {
+		limit = DefaultSearchLimit
+	}
+
+	query += " LIMIT ? OFFSET ?"
+
+	args := make([]any, len(whereArgs), len(whereArgs)+2)
+	copy(args, whereArgs)
+	args = append(args, limit, max(params.Offset, 0))
 
 	return query, args
 }
@@ -175,8 +241,24 @@ func scanJobRow(rows *sql.Rows) (jobs.Job, int64, error) {
 	return job, jobID, nil
 }
 
-func fetchJobTags(db *sql.DB, jobID int64) ([]string, error) {
-	rows, err := db.Query(`SELECT t.tag FROM tags t JOIN job_tags jt ON jt.tag_id = t.id WHERE jt.job_id = ?`, jobID)
+func fetchTagsForJobs(ctx context.Context, db *sql.DB, jobIDs []int64) (map[int64][]string, error) {
+	if len(jobIDs) == 0 {
+		return make(map[int64][]string), nil
+	}
+
+	placeholders := strings.Repeat("?,", len(jobIDs))
+	placeholders = placeholders[:len(placeholders)-1] 
+	args := make([]any, len(jobIDs))
+
+	for i, v := range jobIDs {
+		args[i] = v
+	}
+
+	query := fmt.Sprintf(
+		"SELECT jt.job_id, t.tag FROM tags t JOIN job_tags jt ON jt.tag_id = t.id WHERE jt.job_id IN (%s)",
+		placeholders,
+	)
+	rows, err := db.QueryContext(ctx, query, args...)
 
 	if err != nil {
 		return nil, err
@@ -184,17 +266,18 @@ func fetchJobTags(db *sql.DB, jobID int64) ([]string, error) {
 
 	defer rows.Close()
 
-	var tags []string
+	tagsMappings := make(map[int64][]string)
 
 	for rows.Next() {
+		var jobID int64
 		var tag string
-
-		if err := rows.Scan(&tag); err != nil {
+		
+		if err := rows.Scan(&jobID, &tag); err != nil {
 			return nil, err
 		}
 
-		tags = append(tags, tag)
+		tagsMappings[jobID] = append(tagsMappings[jobID], tag)
 	}
 
-	return tags, rows.Err()
+	return tagsMappings, rows.Err()
 }

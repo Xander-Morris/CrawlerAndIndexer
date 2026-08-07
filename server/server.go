@@ -1,13 +1,18 @@
 package server
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 func New(addr string) *http.Server {
 	mux := http.NewServeMux()
 	registerRoutes(mux)
 
 	return &http.Server{
-		Addr:    addr,
-		Handler: withCORS(mux),
+		Addr:         addr,
+		Handler:      withRecovery(withLogging(withCORS(mux))),
+		ReadTimeout:  time.Second,
+		WriteTimeout: time.Second,
 	}
 }
